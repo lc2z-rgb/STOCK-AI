@@ -1,0 +1,140 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Attracteur d'Aizawa</title>
+<style>
+  html, body { margin: 0; height: 100%; background: #04070f; overflow: hidden; }
+  canvas { display: block; touch-action: none; }
+</style>
+</head>
+<body>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script>
+const CONFIG = {
+  points: 12000,   // points par trajectoire
+  burnIn: 2000,    // pas ignorés pour atteindre l'attracteur
+  scale: 1.8,
+  dt: 0.01,
+  trails: 3        // trajectoires légèrement décalées : traits plus denses
+};
+
+// Attracteur d'Aizawa
+const P = { a: 0.95, b: 0.7, c: 0.6, d: 3.5, e: 0.25, f: 0.1 };
+
+function deriv(x, y, z) {
+  return [
+    (z - P.b) * x - P.d * y,
+    P.d * x + (z - P.b) * y,
+    P.c + P.a * z - (z * z * z) / 3 - (x * x + y * y) * (1 + P.e * z) + P.f * z * x * x * x
+  ];
+}
+
+// Un pas de Runge-Kutta d'ordre 4
+function rk4Step(s) {
+  const h = CONFIG.dt;
+  const k1 = deriv(s.x, s.y, s.z);
+  const k2 = deriv(s.x + k1[0] * h / 2, s.y + k1[1] * h / 2, s.z + k1[2] * h / 2);
+  const k3 = deriv(s.x + k2[0] * h / 2, s.y + k2[1] * h / 2, s.z + k2[2] * h / 2);
+  const k4 = deriv(s.x + k3[0] * h, s.y + k3[1] * h, s.z + k3[2] * h);
+  s.x += (h / 6) * (k1[0] + 2 * k2[0] + 2 * k3[0] + k4[0]);
+  s.y += (h / 6) * (k1[1] + 2 * k2[1] + 2 * k3[1] + k4[1]);
+  s.z += (h / 6) * (k1[2] + 2 * k2[2] + 2 * k3[2] + k4[2]);
+}
+
+function generateGeometry(offset) {
+  const positions = new Float32Array(CONFIG.points * 3);
+  const colors = new Float32Array(CONFIG.points * 3);
+  const lineDistances = new Float32Array(CONFIG.points);
+  const state = { x: 0.1 + offset, y: 0.0, z: 0.0 };
+  const color = new THREE.Color();
+
+  for (let i = 0; i < CONFIG.burnIn; i++) rk4Step(state);
+
+  for (let i = 0; i < CONFIG.points; i++) {
+    rk4Step(state);
+    positions[i * 3]     = state.x * CONFIG.scale;
+    positions[i * 3 + 1] = state.z * CONFIG.scale;
+    positions[i * 3 + 2] = state.y * CONFIG.scale;
+    lineDistances[i] = i / CONFIG.points;
+
+    // vert -> cyan -> violet -> rose le long de la trajectoire
+    color.setHSL(0.28 + 0.68 * lineDistances[i], 0.85, 0.62);
+    colors[i * 3] = color.r;
+    colors[i * 3 + 1] = color.g;
+    colors[i * 3 + 2] = color.b;
+  }
+
+  const geometry = new THREE.BufferGeometry();
+  geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+  geometry.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+  return geometry;
+}
+
+// --- Scène ---
+const renderer = new THREE.WebGLRenderer({ antialias: true });
+renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+renderer.setSize(window.innerWidth, window.innerHeight);
+document.body.appendChild(renderer.domElement);
+
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x04070f);
+const camera = new THREE.PerspectiveCamera(50, window.innerWidth / window.innerHeight, 0.1, 100);
+
+function fitCamera() {
+  const aspect = window.innerWidth / window.innerHeight;
+  camera.aspect = aspect;
+  camera.position.set(0, 0, aspect < 1 ? (7 / aspect) * 0.9 : 7);
+  camera.updateProjectionMatrix();
+  renderer.setSize(window.innerWidth, window.innerHeight);
+}
+fitCamera();
+window.addEventListener('resize', fitCamera);
+
+const group = new THREE.Group();
+group.rotation.x = 0.35;
+scene.add(group);
+
+const lines = [];
+for (let t = 0; t < CONFIG.trails; t++) {
+  const material = new THREE.LineBasicMaterial({
+    vertexColors: true,
+    transparent: true,
+    opacity: 0.8,
+    blending: THREE.AdditiveBlending,
+    depthWrite: false
+  });
+  const line = new THREE.Line(generateGeometry(t * 0.002), material);
+  line.geometry.setDrawRange(0, 0);
+  group.add(line);
+  lines.push(line);
+}
+
+// --- Interaction : glisser pour tourner (souris ou doigt) ---
+let dragging = false, lastX = 0, lastY = 0;
+const el = renderer.domElement;
+el.addEventListener('pointerdown', e => { dragging = true; lastX = e.clientX; lastY = e.clientY; });
+window.addEventListener('pointerup', () => { dragging = false; });
+window.addEventListener('pointermove', e => {
+  if (!dragging) return;
+  group.rotation.y += (e.clientX - lastX) * 0.01;
+  group.rotation.x += (e.clientY - lastY) * 0.01;
+  lastX = e.clientX; lastY = e.clientY;
+});
+
+// --- Boucle d'animation ---
+let drawn = 0;
+function animate() {
+  requestAnimationFrame(animate);
+  if (drawn < CONFIG.points) {
+    drawn = Math.min(CONFIG.points, drawn + 80);
+    lines.forEach(l => l.geometry.setDrawRange(0, drawn));
+  }
+  if (!dragging) group.rotation.y += 0.003;
+  renderer.render(scene, camera);
+}
+animate();
+</script>
+</body>
+</html>
